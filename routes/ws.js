@@ -6,9 +6,10 @@ var path       = require('path');
 var mime       = require('mime');
 var config     = require('../config.json');
 var Job        = require('../lib/job.js');
-var ezJobs     = require('../lib/jobs.js');
 var rgf        = require('../lib/readgrowingfile.js');
 var uuidRegExp = /^\/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})\/?$/;
+var redis      = require('redis');
+var client     = redis.createClient();
 
 module.exports = function (app) {
 
@@ -18,71 +19,78 @@ module.exports = function (app) {
    * Example: /3e167f80-aa9f-11e2-b9c5-c7c7ad0be3cd
    */
   app.get(uuidRegExp, function (req, res) {
-    var rid  = req.params[0];
-    var name = req.query.filename ? req.query.filename : rid;
-
+    var rid         = req.params[0];
+    var name        = req.query.filename ? req.query.filename : rid;
+    var jobRedisKey = 'job:' + rid;
     // check if this job exists
-    if (ezJobs[rid] && ezJobs[rid].ecsPath && ezJobs[rid].ecsStream) {
-      console.log('Serving growing result file');
-      var ext = mime.extension(ezJobs[rid].contentType);
-      res.writeHead(200, {
-        'Content-Type': ezJobs[rid].contentType,
-        'Content-Disposition': 'attachment; filename="' + name + '.' + ext + '"'
-      });
-
-      console.log('Requesting deferred result ECs file (while response is generated)');
-      // if job is still running (ECs are still writen in the temp file)
-      // use the GrowingFile module to stream the result to the HTTP response
-      rgf.readGrowingFile({
-        sourceFilePath: ezJobs[rid].ecsPath,
-        onData: function (data) {
-          console.log('Data added to ECs temp file (' + data.length + ' bytes)');
-          res.write(data);
-        },
-        isStillGrowing: function () {
-          return !ezJobs[rid].ecsStreamEnd;
-        },
-        lastByteOfFile: function () {
-          return ezJobs[rid].byteWriten;
-        },
-        endCallback: function () {
-          console.log('ECs temp file completed');
-          res.end();
-        }
-      });
-    } else {
-      console.log('Serving full result file');
-      var jobDir = path.join(__dirname, '/../tmp/jobs/', rid.charAt(0), rid.charAt(1), rid);
-      if (!fs.existsSync(jobDir)) {
-        res.status(404);
-        res.end();
+    client.hgetall(jobRedisKey, function (err, job) {
+      if (err) {
+        res.send(500);
         return;
       }
-      fs.readdir(jobDir, function (err, files) {
-        if (err) {
-          res.status(500);
-          res.end();
-        }
-        var reg = /^job-ecs\.([a-z]+)$/;
-        var filename;
-        for (var i in files) {
-          filename = files[i];
-          
-          if (reg.test(filename)) {
-            var ext = filename.split('.').pop();
 
-            res.writeHead(200, {
-              'Content-Type': mime.lookup(ext),
-              'Content-Disposition': 'attachment; filename="' + name + '.' + ext + '"'
-            });
-            fs.createReadStream(path.join(jobDir, filename)).pipe(res);
-            return;
+      if (job.ecsPath) {
+        console.log('Serving growing result file');
+        var ext = mime.extension(job.contentType);
+        res.writeHead(200, {
+          'Content-Type': job.contentType,
+          'Content-Disposition': 'attachment; filename="' + name + '.' + ext + '"'
+        });
+
+        console.log('Requesting deferred result ECs file (while response is generated)');
+        // if job is still running (ECs are still writen in the temp file)
+        // use the GrowingFile module to stream the result to the HTTP response
+        rgf.readGrowingFile({
+          sourceFilePath: job.ecsPath,
+          onData: function (data) {
+            console.log('Data added to ECs temp file (' + data.length + ' bytes)');
+            res.write(data);
+          },
+          isStillGrowing: function (callback) {
+            client.hget(jobRedisKey, 'ecsStreamEnd', callback);
+          },
+          lastByteOfFile: function (callback) {
+            client.hget(jobRedisKey, 'byteWritten', callback);
+          },
+          endCallback: function () {
+            console.log('ECs temp file completed');
+            res.end();
           }
+        });
+      } else {
+        console.log('Serving full result file');
+        var jobDir = path.join(__dirname, '/../tmp/jobs/', rid.charAt(0), rid.charAt(1), rid);
+        if (!fs.existsSync(jobDir)) {
+          res.status(404);
+          res.end();
+          return;
         }
-        res.status(404);
-        res.end();
-      });
-    }
+        fs.readdir(jobDir, function (err, files) {
+          if (err) {
+            res.status(500);
+            res.end();
+          }
+          var reg = /^job-ecs\.([a-z]+)$/;
+          var filename;
+          for (var i in files) {
+            filename = files[i];
+            
+            if (reg.test(filename)) {
+              var ext = filename.split('.').pop();
+
+              res.writeHead(200, {
+                'Content-Type': mime.lookup(ext),
+                'Content-Disposition': 'attachment; filename="' + name + '.' + ext + '"'
+              });
+              fs.createReadStream(path.join(jobDir, filename)).pipe(res);
+              return;
+            }
+          }
+          res.status(404);
+          res.end();
+        });
+      }
+    });
   });
 
   /**
