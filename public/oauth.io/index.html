@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta http-equiv="content-type" content="text/html; charset=utf-8" />
+    <title>ezPAARSE</title>
+
+    <link type="text/css" rel="stylesheet" href="/stylesheets/doc.css">
+
+    <script type="text/javascript" src="/js/jquery-1.9.1.min.js"></script>
+    <script type="text/javascript" src="./oauth.js"></script>
+</head>
+<body>
+
+    <a id="auth-git" href="#">GitHub Auth</a><br/>
+    <a id="auth-fb" href="#">Facebook Auth</a>
+    <pre id="result"></pre>
+
+
+    <script>
+        
+    OAuth.initialize('PLWRwNDgpZ7SUNm6vAozDWqt3RY');
+
+    $('#auth-git').click(function () {
+        OAuth.popup('github', function (err, result) { // or OAuth.callback
+          console.log(err, result);
+          result.get('/user').done(function (data) {
+            console.log(data);
+            $('#result').text(JSON.stringify(data, null, '  '));
+          });
+        });
+    });
+
+    $('#auth-fb').click(function () {
+        OAuth.popup('facebook', function (err, result) {
+          console.log(err, result);
+          result.get('/me').done(function (data) {
+            console.log(data);
+            $('#result').text(JSON.stringify(data, null, '  '));
+          });
+        });
+    });
+
+    </script>
+
+</body>
+</html>
